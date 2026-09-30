@@ -61,7 +61,23 @@ class DiscreteActorCritic(nn.Module):
         ``sample()``, ``log_prob(action)`` and ``entropy()``.
         """
         # ===================== YOUR CODE HERE (Part 3) =====================
-        raise NotImplementedError("Implement DiscreteActorCritic.get_action_and_value")
+
+        logits = self.actor(x)
+        dist = Categorical(logits=logits)
+
+        if action is None:
+            if deterministic:
+                action = torch.argmax(logits, dim=1)
+            else:
+                action = dist.sample()
+
+        logprob = dist.log_prob(action)
+        entropy = dist.entropy()
+        value = self.critic(x)
+
+        return action, logprob, entropy, value
+    
+        # raise NotImplementedError("Implement DiscreteActorCritic.get_action_and_value")
         # ===================================================================
 
     def act(self, x, deterministic: bool = False):
