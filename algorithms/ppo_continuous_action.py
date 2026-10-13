@@ -27,9 +27,9 @@ from envs import (
     make_env,
     resolve_training_video_schedule,
 )
-from networks import ContinuousActorCritic
+from networks import get_network
 from core.checkpoint import save_checkpoint
-from core.base_config import AgentConfig, RunConfig
+from core.base_config import RunConfig
 from algorithms.base import Algorithm
 
 
@@ -71,14 +71,15 @@ class Args(RunConfig):
     """Full configuration for PPO with continuous actions.
 
     Inherits run-level fields from :class:`RunConfig` and composes
-    :class:`AgentConfig` (network architecture) and :class:`PPOConfig`
-    (algorithm hyperparameters).
+    :class:`PPOConfig` (algorithm hyperparameters); the network is
+    ``network`` + ``network_kwargs`` (see :func:`networks.get_network`).
     """
     algorithm: str = "ppo_continuous_action"
 
     # Nested configs
-    agent: AgentConfig = field(default_factory=AgentConfig)
-    """network architecture configuration"""
+    network: str = "ContinuousActorCritic"
+    """network class to build (see ``RunConfig.network``); any class with
+    the interface of ``ContinuousActorCritic`` works"""
     ppo_continuous_action: PPOConfig = field(default_factory=PPOConfig)
     """PPO hyperparameters — the field name deliberately equals the algorithm
     name, so the YAML section, saved run configs (``asdict``), and CLI
@@ -148,13 +149,7 @@ class PPO(Algorithm):
 
         assert isinstance(self.envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
-        self.agent = ContinuousActorCritic(
-            self.envs,
-            args.agent.activation,
-            args.agent.hidden_layers_size,
-            use_obs_norm=args.agent.use_obs_norm,
-            obs_norm_epsilon=args.agent.obs_norm_epsilon,
-        ).to(self.device)
+        self.agent = get_network(args.network)(self.envs, **args.network_kwargs).to(self.device)
         self.optimizer = optim.Adam(self.agent.parameters(), lr=args.algo.learning_rate, eps=1e-5)
 
         self.last_iteration_resume = 0
@@ -177,6 +172,7 @@ class PPO(Algorithm):
             self.next_obs = torch.Tensor(self.next_obs).to(self.device)
             self.next_done = torch.zeros(args.num_envs).to(self.device)
             self.global_ep_counter = 0
+            self.num_updates = 0
             self.recent_ep_returns = deque(maxlen=100)
             self.recent_ep_lengths = deque(maxlen=100)
         else:
@@ -337,6 +333,7 @@ class PPO(Algorithm):
                         # clip_grad_norm_ returns a (possibly CUDA) scalar tensor; .item() is device-safe
                         grad_norms.append(float(grad_norm.detach().item()))
                         self.optimizer.step()
+                        self.num_updates += 1
 
                     if cfg.target_kl is not None and approx_kl > cfg.target_kl:
                         break
@@ -427,6 +424,7 @@ class PPO(Algorithm):
             "losses/clipfrac": np.mean(clipfracs),
             "losses/explained_variance": explained_var,
             "charts/SPS": sps,
+            "charts/num_updates": self.num_updates,
             "global_step": self.global_step,
         }
         metrics_dict["charts/learning_rate"] = self.optimizer.param_groups[0]["lr"]
@@ -481,6 +479,7 @@ class PPO(Algorithm):
             "next_obs": self.next_obs.detach().cpu(),
             "next_done": self.next_done.detach().cpu(),
             "global_ep_counter": int(self.global_ep_counter),
+            "num_updates": int(self.num_updates),
             "recent_ep_returns": list(self.recent_ep_returns),
             "recent_ep_lengths": list(self.recent_ep_lengths),
         }
@@ -505,6 +504,7 @@ class PPO(Algorithm):
         self.next_obs = state["next_obs"].to(self.device)
         self.next_done = state["next_done"].to(self.device)
         self.global_ep_counter = int(state["global_ep_counter"])
+        self.num_updates = int(state.get("num_updates", 0))  # absent in older checkpoints
         self.recent_ep_returns = deque(state["recent_ep_returns"], maxlen=100)
         self.recent_ep_lengths = deque(state["recent_ep_lengths"], maxlen=100)
 

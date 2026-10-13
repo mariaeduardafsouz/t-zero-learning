@@ -216,3 +216,5 @@ logs/
 # instructor-only assignment solutions (never committed)
 algorithms/dqn_solution.py
 *_solution.py
+
+docs/plans
